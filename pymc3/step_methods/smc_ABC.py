@@ -139,7 +139,7 @@ class SMC(atext.ArrayStepSharedLLK):
     def __init__(self, vars=None, out_vars=None, samples=1000, n_chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 observed=None, epsilons=None, ladder=None, minimum_eps=None):
+                 observed=None, epsilons=None, minimum_eps=None, iqr_scale=None):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -151,7 +151,7 @@ class SMC(atext.ArrayStepSharedLLK):
         if vars is None:
             vars = model.vars
 
-        vars = inputvars(vars)
+        self.vars = inputvars(vars)
 
         if out_vars is None:
             if not any(likelihood_name == RV.name for RV in model.unobserved_RVs):
@@ -166,10 +166,10 @@ class SMC(atext.ArrayStepSharedLLK):
         out_varnames = [out_var.name for out_var in out_vars]
 
         if covariance is None and proposal_name == 'MultivariateNormal':
-            self.covariance = np.eye(sum(v.dsize for v in vars))
+            self.covariance = np.eye(sum(v.dsize for v in self.vars))
             scale = self.covariance
         elif covariance is None:
-            scale = np.ones(sum(v.dsize for v in vars))
+            scale = np.ones(sum(v.dsize for v in self.vars))
         else:
             scale = covariance
 
@@ -189,13 +189,11 @@ class SMC(atext.ArrayStepSharedLLK):
         self.accepted = 0
         self.observed = observed
 
-        self.ladder = ladder
         self.all_sum_stats = []
         self.sum_stat = 0 
         self.minimum_eps = minimum_eps
-
-        self.beta = 0
-        self.sjs = 1
+        self.iqr_scale = 0.5
+        self.epsilons = epsilons
         self.stage = 0
         self.chain_index = 0
         self.resampling_indexes = np.arange(n_chains)
@@ -216,7 +214,7 @@ class SMC(atext.ArrayStepSharedLLK):
         start = model.test_point
 
         init_rnd = {}
-        for v in vars:
+        for v in self.vars:
             if pm.util.is_transformed_name(v.name):
                 trans = v.distribution.transform_used.forward_val
                 init_rnd[v.name] = trans(v.distribution.dist.random(
@@ -225,24 +223,28 @@ class SMC(atext.ArrayStepSharedLLK):
                 init_rnd[v.name] = v.random(size=self.n_chains, point=start)
 
         for i in range(self.n_chains):
-            self.population.append(pm.Point({v.name: init_rnd[v.name][i] for v in vars},
+            self.population.append(pm.Point({v.name: init_rnd[v.name][i] for v in self.vars},
                                             model=model))
         self.chain_previous_lpoint = copy.deepcopy(self.population)
 
-        shared = make_shared_replacements(vars, model)
-        self.logp_forw = logp_forw(out_vars, vars, shared)
-        self.check_bnd = logp_forw([model.varlogpt], vars, shared)
+        shared = make_shared_replacements(self.vars, model)
+        self.logp_forw = logp_forw(out_vars, self.vars, shared)
+        self.check_bnd = logp_forw([model.varlogpt], self.vars, shared)
 
         # epsilon computation, drawing samples from the prior, mean of the first population
         #self.epsilon = np.array([d[str(v)] for d in self.population for v in vars]).mean()
         # epsilon computation, drawing samples from the prior, a quantile of the first population
         #self.epsilon = mquantiles([d[str(v)] for d in self.population for v in vars], 
         #              prob=[0.99])[0]
-        self.epsilon_max = mquantiles([d[str(v)] for d in self.population for v in vars], 
-                           prob=[0.99])[0]
-        self.epsilons = np.linspace(self.epsilon_max, self.minimum_eps, self.ladder)
+        
+        if self.epsilons is None:
+            range_iq = mquantiles([d[str(v)] for d in self.population for v in self.vars], 
+                                  prob=[0.25, 0.75])
+            self.epsilon = np.abs(range_iq[1] - range_iq[0]) * self.iqr_scale
+        else:
+            self.epsilon = self.epsilons[self.stage]
 
-        super(SMC, self).__init__(vars, out_vars, shared, epsilons)
+        super(SMC, self).__init__(self.vars, out_vars, shared, epsilons)
 
     def astep(self, q0):
         """[summary]
@@ -301,36 +303,19 @@ class SMC(atext.ArrayStepSharedLLK):
 
         Returns
         -------
-        beta(m+1) : scalar, float
-            tempering parameter of the next stage
-        beta(m) : scalar, float
-            tempering parameter of the current stage
         weights : :class:`numpy.ndarray`
             Importance weights (floats)
-        sj : float
-            Mean of unnormalized weights
+        epsilon : 
         """
         weights_un = self.likelihoods
         weights = weights_un / np.sum(weights_un)
-        new_beta, old_beta = 1,2
-
-        #low_beta = old_beta = self.beta
-        #up_beta = 2.
-        #rN = int(len(self.likelihoods) * self.threshold)
-
-        #while up_beta - low_beta > 1e-6:
-        #    new_beta = (low_beta + up_beta) / 2.
-        #    weights_un = np.exp((new_beta - old_beta) * (self.likelihoods - self.likelihoods.max()))
-        #    ESS = int(1 / np.sum(weights ** 2))
-            #ESS = int(1 / np.max(weights))
-        #    if ESS == rN:
-        #        break
-        #    elif ESS < rN:
-        #        up_beta = new_beta
-        #    else:
-        #        low_beta = new_beta
-
-        return new_beta, old_beta, weights, np.mean(weights_un)
+        if self.epsilons is None:
+            epsilon = np.abs(mquantiles([d[str(v)] for d in self.population for v in self.vars], 
+                                       prob=[self.iqr_scale])[0])
+        else:
+            epsilon = self.epsilons[self.stage]
+   
+        return weights, epsilon
 
     def calc_covariance(self):
         """Calculate trace covariance matrix based on importance weights.
@@ -341,7 +326,6 @@ class SMC(atext.ArrayStepSharedLLK):
             weighted covariances (NumPy > 1.10. required)
         """
         cov = np.cov(self.array_population, aweights=self.weights.ravel(), bias=False, rowvar=0)
-        print(cov)
         if np.isnan(cov).any() or np.isinf(cov).any():
             raise ValueError('Sample covariances not valid! Likely "n_chains" is too small!')
         return np.atleast_2d(cov)
@@ -450,7 +434,7 @@ class SMC(atext.ArrayStepSharedLLK):
 
 def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                tune_interval=10, progressbar=False, model=None, random_seed=-1, rm_flag=True, 
-               observed=None, epsilons=None, ladder=None, minimum_eps=None,**kwargs):
+               observed=None, epsilons=None, minimum_eps=None,iqr_scale=None, **kwargs):
     """Sequential Monte Carlo sampling
 
     Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
@@ -526,8 +510,8 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
         pm._log.info('Argument `step` is None. Auto-initialising step object '
                      'using given/default parameters.')
         step = SMC(n_chains=n_chains, tune_interval=tune_interval, model=model, 
-                   observed=observed, epsilons=epsilons, ladder=ladder, minimum_eps=minimum_eps)
-    print(step.epsilons)
+                   observed=observed, epsilons=epsilons, minimum_eps=minimum_eps, 
+                   iqr_scale=iqr_scale)
 
     if homepath is None:
         raise TypeError('Argument `homepath` should be path to result_directory.')
@@ -570,9 +554,8 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
     chains = stage_handler.recover_existing_results(stage, draws, step)
 
     with model:
-        #while step.beta < 1:
-        for step.epsilon in step.epsilons:
-            print(step.epsilon)
+        while step.epsilon > step.minimum_eps:
+        #for step.epsilon in step.epsilons:
             if step.stage == 0:
                 # Initial stage
                 pm._log.info('Sample initial stage: ...')
@@ -580,7 +563,7 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
             else:
                 draws = step.n_steps
 
-            pm._log.info('Beta: %f Stage: %i' % (step.beta, step.stage))
+            pm._log.info('Epsilon: {:.4f} Stage: {}'.format(step.epsilon, step.stage))
 
             # Metropolis sampling intermediate stages
             chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
@@ -598,14 +581,11 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
 
             step.population, step.array_population, step.likelihoods = step.select_end_points(
                 mtrace)
-            step.beta, step.old_beta, step.weights, sj = step.calc_beta()
-            #step.beta, step.old_beta, step.weights, sj = 1,2,3,4
-            step.sjs *= sj
+            step.weights, step.epsilon = step.calc_beta()
 
-            #if step.beta > 1.:
-            if step.epsilon == step.epsilons[-1]:
-                pm._log.info('Beta > 1.: %f' % step.beta)
-                step.beta = 1.
+          
+            if step.epsilon < step.minimum_eps:
+                pm._log.info('Epsilon {:.4f} < minimum epsilon {:.4f}'.format(step.epsilon, step.minimum_eps))
                 stage_handler.dump_atmip_params(step)
                 if stage == -1:
                     chains = []
@@ -644,7 +624,6 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
 
         stage_handler.dump_atmip_params(step)
 
-        model.marginal_likelihood = step.sjs
         return stage_handler.create_result_trace(step.stage,
                                                  idxs=range(samples),
                                                  step=step,
