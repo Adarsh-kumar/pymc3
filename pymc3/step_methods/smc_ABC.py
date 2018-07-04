@@ -35,7 +35,7 @@ from .metropolis import Proposal
 from .arraystep import metrop_select
 from ..backends import smc_text as atext
 
-__all__ = ['SMC', 'sample_smc']
+__all__ = ['SMC_ABC', 'sample_smc_abc']
 
 EXPERIMENTAL_WARNING = ("Warning: SMC is an experimental step method, and not yet "
                         "recommended for use in PyMC3!")
@@ -78,7 +78,7 @@ def choose_proposal(proposal_name, scale=1.):
     return proposal_dists[proposal_name](scale)
 
 
-class SMC(atext.ArrayStepSharedLLK):
+class SMC_ABC(atext.ArrayStepSharedLLK):
     """Adaptive Transitional Markov-Chain Monte-Carlo sampler class.
 
     Creates initial samples and framework around the (C)ATMIP parameters
@@ -244,7 +244,7 @@ class SMC(atext.ArrayStepSharedLLK):
         else:
             self.epsilon = self.epsilons[self.stage]
 
-        super(SMC, self).__init__(self.vars, out_vars, shared, epsilons)
+        super(SMC_ABC, self).__init__(self.vars, out_vars, shared, epsilons)
 
     def astep(self, q0):
         """[summary]
@@ -432,9 +432,9 @@ class SMC(atext.ArrayStepSharedLLK):
         return outindx
 
 
-def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
+def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                tune_interval=10, progressbar=False, model=None, random_seed=-1, rm_flag=True, 
-               observed=None, epsilons=None, minimum_eps=None,iqr_scale=None, **kwargs):
+               observed=None, epsilons=None, minimum_eps=None, iqr_scale=None, **kwargs):
     """Sequential Monte Carlo sampling
 
     Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
@@ -506,16 +506,21 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
     if random_seed != -1:
         nr.seed(random_seed)
 
+
     if step is None:
         pm._log.info('Argument `step` is None. Auto-initialising step object '
                      'using given/default parameters.')
-        step = SMC(n_chains=n_chains, tune_interval=tune_interval, model=model, 
-                   observed=observed, epsilons=epsilons, minimum_eps=minimum_eps, 
+        step = SMC_ABC(n_chains=n_chains, tune_interval=tune_interval, model=model, 
+                  observed=observed, epsilons=epsilons, minimum_eps=minimum_eps, 
                    iqr_scale=iqr_scale)
+
+    step.minimum_eps = minimum_eps
+    step.observed = observed
+    step.iqr_scale = iqr_scale
+    step.epsilons = epsilons
 
     if homepath is None:
         raise TypeError('Argument `homepath` should be path to result_directory.')
-
     if 'n_jobs' in kwargs:
         cores = kwargs['n_jobs']
         warnings.warn(
@@ -551,7 +556,7 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
 
     stage_handler.clean_directory(stage, None, rm_flag)
 
-    chains = stage_handler.recover_existing_results(stage, draws, step)
+    chains = stage_handler.recover_existing_results(stage, draws, chains, step)
 
     with model:
         while step.epsilon > step.minimum_eps:
@@ -598,7 +603,7 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
                 stage_handler.dump_atmip_params(step)
 
                 step.stage += 1
-                del(mtrace)
+                #del(mtrace) #################################?????
 
         # Metropolis sampling final stage
         pm._log.info('Sample final stage')

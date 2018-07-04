@@ -16,7 +16,7 @@ from .distributions.distribution import draw_values
 from .model import modelcontext, Point, all_continuous
 from .step_methods import (NUTS, HamiltonianMC, Metropolis, BinaryMetropolis,
                            BinaryGibbsMetropolis, CategoricalGibbsMetropolis,
-                           Slice, CompoundStep, arraystep, smc)
+                           Slice, CompoundStep, arraystep, smc, SMC_ABC)
 from .util import update_start_vals, get_untransformed_name, is_transformed_name, get_default_varnames
 from .vartypes import discrete_types
 from pymc3.step_methods.hmc import quadpotential
@@ -338,6 +338,33 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
                                random_seed=random_seed,
                                rm_flag=step_kwargs.get('rm_flag', True),
                                **kwargs)
+
+
+    if isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
+        if step_kwargs is None:
+            step_kwargs = {}
+        if chains is None:
+            chains = 100
+        if cores is None:
+            cores = 1
+        test_folder = mkdtemp(prefix='SMC_TEST')
+        trace = pm.step_methods.smc_ABC.sample_smc_abc(samples=draws,
+                               chains=chains,
+                               step=step,
+                               start=start,
+                               homepath=step_kwargs.get('homepath', test_folder),
+                               stage=step_kwargs.get('stage', 0),
+                               cores=cores,
+                               progressbar=progressbar,
+                               model=model,
+                               random_seed=random_seed,
+                               rm_flag=step_kwargs.get('rm_flag', True),
+                               iqr_scale=step_kwargs.get('iqr_scale', None),
+                               observed=step_kwargs.get('observed', None), 
+                               minimum_eps=step_kwargs.get('minimum_eps', None),
+                               epsilons=step_kwargs.get('epsilons', None), 
+                               **kwargs)
+
     else:
         if cores is None:
             cores = min(4, _cpu_count())

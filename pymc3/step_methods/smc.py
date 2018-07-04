@@ -1,12 +1,3 @@
-"""Sequential Monte Carlo sampler also known as
-Adaptive Transitional Markov Chain Monte Carlo sampler.
-Runs on any pymc3 model.
-Created on March, 2016
-Various significant updates July, August 2016
-Made pymc3 compatible November 2016
-Renamed to SMC and further improvements March 2017
-@author: Hannes Vasyura-Bathke
-"""
 import numpy as np
 import pymc3 as pm
 from tqdm import tqdm
@@ -380,15 +371,8 @@ class SMC(atext.ArrayStepSharedLLK):
 def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                progressbar=False, model=None, random_seed=-1, rm_flag=True, **kwargs):
     """Sequential Monte Carlo sampling
-<<<<<<< HEAD
-    Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
-    iterations. Once finished, the sampled traces are evaluated:
-=======
-
     Samples the parameter space using a `chains` number of parallel Metropolis chains.
     Once finished, the sampled traces are evaluated:
-
->>>>>>> d1d2aa202803dada164cb378a4485fbba59f9e76
     (1) Based on the likelihoods of the final samples, chains are weighted
     (2) the weighted covariance of the ensemble is calculated and set as new proposal distribution
     (3) the variation in the ensemble is calculated and also the next tempering parameter (`beta`)
@@ -709,3 +693,4 @@ def logp_forw(out_vars, vars, shared):
     f = theano.function([inarray0], out_list)
     f.trust_input = True
     return f
+    
