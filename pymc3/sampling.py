@@ -340,7 +340,7 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
                                **kwargs)
 
 
-    if isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
+    elif isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
         if step_kwargs is None:
             step_kwargs = {}
         if chains is None:

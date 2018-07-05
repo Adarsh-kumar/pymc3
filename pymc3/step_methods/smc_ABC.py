@@ -91,9 +91,9 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         List of output variables for trace recording. If empty unobserved_RVs are taken.
     samples : int
         The number of samples to draw from the last stage, i.e. the posterior. Defaults to 1000.
-        The number of samples should be a multiple of `n_chains`, otherwise the returned number of
-        draws will be the lowest closest multiple of `n_chains`.
-    n_chains : int
+        The number of samples should be a multiple of `chains`, otherwise the returned number of
+        draws will be the lowest closest multiple of `chains`.
+    chains : int
         Number of chains per stage has to be a large number of number of n_jobs (processors to be
         used) on the machine.
     n_steps : int
@@ -103,7 +103,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         Factor applied to the proposal distribution i.e. the step size of the Markov Chain. Only
         works if `tune_interval=0` otherwise it will be determined adaptively.
     covariance : :class:`numpy.ndarray`
-        (n_chains x n_chains)
+        (chains x chains)
         Initial Covariance matrix for proposal distribution, if None - identity matrix taken
     likelihood_name : string
         name of the :class:`pymc3.deterministic` variable that contains the model likelihood.
@@ -136,10 +136,10 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
     """
     default_blocked = True
 
-    def __init__(self, vars=None, out_vars=None, samples=1000, n_chains=100, n_steps=25, scaling=1.,
+    def __init__(self, vars=None, out_vars=None, samples=1000, chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 observed=None, epsilons=None, minimum_eps=None, iqr_scale=None):
+                 epsilons=None, minimum_eps=0.5, observed=None, iqr_scale=0.5):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -181,9 +181,12 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.tune_interval = tune_interval
         self.steps_until_tune = tune_interval
 
-        self.proposal_samples_array = self.proposal_dist(n_chains)
+        self.proposal_samples_array = self.proposal_dist(chains)
 
         self.samples = samples
+        self.population = [model.test_point]
+        self.n_steps = n_steps
+        self.n_steps_final = n_steps
         self.n_steps = n_steps
         self.stage_sample = 0
         self.accepted = 0
@@ -192,15 +195,15 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.all_sum_stats = []
         self.sum_stat = 0 
         self.minimum_eps = minimum_eps
-        self.iqr_scale = 0.5
+        self.iqr_scale = iqr_scale
         self.epsilons = epsilons
         self.stage = 0
         self.chain_index = 0
-        self.resampling_indexes = np.arange(n_chains)
+        self.resampling_indexes = np.arange(chains)
 
         self.threshold = threshold
-        self.n_chains = n_chains
-        self.likelihoods = np.zeros(n_chains)
+        self.chains = chains
+        self.likelihoods = np.zeros(chains)
 
         self.likelihood_name = likelihood_name
         self._llk_index = out_varnames.index(likelihood_name)
@@ -208,41 +211,11 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.any_discrete = self.discrete.any()
         self.all_discrete = self.discrete.all()
 
-        # create initial population
-        self.population = []
-        self.array_population = np.zeros(n_chains)
-        start = model.test_point
-
-        init_rnd = {}
-        for v in self.vars:
-            if pm.util.is_transformed_name(v.name):
-                trans = v.distribution.transform_used.forward_val
-                init_rnd[v.name] = trans(v.distribution.dist.random(
-                    size=self.n_chains, point=start))
-            else:
-                init_rnd[v.name] = v.random(size=self.n_chains, point=start)
-
-        for i in range(self.n_chains):
-            self.population.append(pm.Point({v.name: init_rnd[v.name][i] for v in self.vars},
-                                            model=model))
-        self.chain_previous_lpoint = copy.deepcopy(self.population)
 
         shared = make_shared_replacements(self.vars, model)
         self.logp_forw = logp_forw(out_vars, self.vars, shared)
         self.check_bnd = logp_forw([model.varlogpt], self.vars, shared)
-
-        # epsilon computation, drawing samples from the prior, mean of the first population
-        #self.epsilon = np.array([d[str(v)] for d in self.population for v in vars]).mean()
-        # epsilon computation, drawing samples from the prior, a quantile of the first population
-        #self.epsilon = mquantiles([d[str(v)] for d in self.population for v in vars], 
-        #              prob=[0.99])[0]
         
-        if self.epsilons is None:
-            range_iq = mquantiles([d[str(v)] for d in self.population for v in self.vars], 
-                                  prob=[0.25, 0.75])
-            self.epsilon = np.abs(range_iq[1] - range_iq[0]) * self.iqr_scale
-        else:
-            self.epsilon = self.epsilons[self.stage]
 
         super(SMC_ABC, self).__init__(self.vars, out_vars, shared, epsilons)
 
@@ -309,12 +282,8 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         """
         weights_un = self.likelihoods
         weights = weights_un / np.sum(weights_un)
-        if self.epsilons is None:
-            epsilon = np.abs(mquantiles([d[str(v)] for d in self.population for v in self.vars], 
-                                       prob=[self.iqr_scale])[0])
-        else:
-            epsilon = self.epsilons[self.stage]
-   
+        epsilon = _calc_epsilon(self.epsilons, self.population, self.vars, 
+                                               self.iqr_scale, self.stage)
         return weights, epsilon
 
     def calc_covariance(self):
@@ -327,10 +296,10 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         """
         cov = np.cov(self.array_population, aweights=self.weights.ravel(), bias=False, rowvar=0)
         if np.isnan(cov).any() or np.isinf(cov).any():
-            raise ValueError('Sample covariances not valid! Likely "n_chains" is too small!')
+            raise ValueError('Sample covariances not valid! Likely "chains" is too small!')
         return np.atleast_2d(cov)
 
-    def select_end_points(self, mtrace):
+    def select_end_points(self, mtrace, chains):
         """Read trace results (variables and model likelihood) and take end points for each chain
         and set as start population for the next stage.
 
@@ -347,7 +316,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         likelihoods : :class:`numpy.ndarray`
             Array of likelihoods of the trace end-points
         """
-        array_population = np.zeros((self.n_chains, self.ordering.size))
+        array_population = np.zeros((chains, self.ordering.size))
         n_steps = len(mtrace)
 
         # collect end points of each chain and put into array
@@ -366,20 +335,18 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
 
         return population, array_population, likelihoods
 
-    def get_chain_previous_lpoint(self, mtrace):
+    def get_chain_previous_lpoint(self, mtrace, chains):
         """Read trace results and take end points for each chain and set as previous chain result
         for comparison of metropolis select.
-
         Parameters
         ----------
         mtrace : :class:`.base.MultiTrace`
-
         Returns
         -------
         chain_previous_lpoint : list
             all unobservedRV values, including dataset likelihoods
         """
-        array_population = np.zeros((self.n_chains, self.lordering.size))
+        array_population = np.zeros((chains, self.lordering.size))
         n_steps = len(mtrace)
         for _, slc, shp, _, var in self.lordering.vmap:
             slc_population = mtrace.get_values(varname=var, burn=n_steps - 1, combine=True)
@@ -408,11 +375,11 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         outindex : :class:`numpy.ndarray`
             Array of resampled trace indexes
         """
-        parents = np.arange(self.n_chains)
-        N_childs = np.zeros(self.n_chains, dtype=int)
+        parents = np.arange(self.chains)
+        N_childs = np.zeros(self.chains, dtype=int)
 
         cum_dist = np.cumsum(self.weights)
-        u = (parents + np.random.rand()) / self.n_chains
+        u = (parents + np.random.rand()) / self.chains
         j = 0
         for i in parents:
             while u[i] > cum_dist[j]:
@@ -421,7 +388,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
             N_childs[j] += 1
 
         indx = 0
-        outindx = np.zeros(self.n_chains, dtype=int)
+        outindx = np.zeros(self.chains, dtype=int)
         for i in parents:
             if N_childs[i] > 0:
                 for j in range(indx, (indx + N_childs[i])):
@@ -434,7 +401,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
 
 def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                tune_interval=10, progressbar=False, model=None, random_seed=-1, rm_flag=True, 
-               observed=None, epsilons=None, minimum_eps=None, iqr_scale=None, **kwargs):
+               epsilons=None, minimum_eps=None, iqr_scale=None, **kwargs):
     """Sequential Monte Carlo sampling
 
     Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
@@ -468,7 +435,7 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
     cores : int
         The number of cores to be used in parallel. Be aware that Theano has internal
         parallelization. Sometimes this is more efficient especially for simple models.
-        `step.n_chains / cores` has to be an integer number!
+        `step.chains / cores` has to be an integer number!
     tune_interval : int
         Number of steps to tune for. Defaults to 10.
     progressbar : bool
@@ -490,27 +457,16 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
     """
     warnings.warn(EXPERIMENTAL_WARNING)
 
-    n_chains = chains
-    if 'n_chains' in kwargs:
-        n_chains = kwargs['n_chains']
-        warnings.warn(
-            "The n_chains argument has been deprecated. Use chains instead.",
-            DeprecationWarning)
-    remainder = samples % n_chains
-    if remainder != 0:
-        warnings.warn("'samples' {} is not a multiple of 'chains' {}. Hence, you will get {} "
-                      "draws from the posterior".format(samples, n_chains, samples - remainder))
-
     model = modelcontext(model)
 
     if random_seed != -1:
         nr.seed(random_seed)
 
-
+    """ 
     if step is None:
         pm._log.info('Argument `step` is None. Auto-initialising step object '
                      'using given/default parameters.')
-        step = SMC_ABC(n_chains=n_chains, tune_interval=tune_interval, model=model, 
+        step = SMC_ABC(chains=chains, tune_interval=tune_interval, model=model, 
                   observed=observed, epsilons=epsilons, minimum_eps=minimum_eps, 
                    iqr_scale=iqr_scale)
 
@@ -518,22 +474,18 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
     step.observed = observed
     step.iqr_scale = iqr_scale
     step.epsilons = epsilons
-
+    """
     if homepath is None:
         raise TypeError('Argument `homepath` should be path to result_directory.')
-    if 'n_jobs' in kwargs:
-        cores = kwargs['n_jobs']
-        warnings.warn(
-            "The n_jobs argument has been deprecated. Use cores instead.",
-            DeprecationWarning)
+
     if cores > 1:
-        if not (step.n_chains / float(cores)).is_integer():
+        if not (step.chains / float(cores)).is_integer():
             raise TypeError('chains / cores has to be a whole number!')
 
     if start is not None:
-        if len(start) != step.n_chains:
+        if len(start) != step.chains:
             raise TypeError('Argument `start` should have dicts equal the '
-                            'number of chains (`step.n_chains`)')
+                            'number of chains (`step.chains`)')
         else:
             step.population = start
 
@@ -556,8 +508,17 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
 
     stage_handler.clean_directory(stage, None, rm_flag)
 
-    chains = stage_handler.recover_existing_results(stage, draws, chains, step)
+    x_chains = stage_handler.recover_existing_results(stage, draws, chains, step)
 
+    if start is not None:
+        if len(start) != chains:
+            raise TypeError('Argument `start` should have dicts equal the '
+                            'number of chains (`chains`)')
+        else:
+            step.population = start
+    else:
+        step.population = _initial_population(samples, chains, model, step.vars)
+    step.epsilon = _calc_epsilon(step.epsilons, step.population, step.vars, step.iqr_scale, step.stage)
     with model:
         while step.epsilon > step.minimum_eps:
         #for step.epsilon in step.epsilons:
@@ -571,13 +532,14 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
             pm._log.info('Epsilon: {:.4f} Stage: {}'.format(step.epsilon, step.stage))
 
             # Metropolis sampling intermediate stages
-            chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
+            x_chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
             sample_args = {'draws': draws,
                            'step': step,
                            'stage_path': stage_handler.stage_path(step.stage),
                            'progressbar': progressbar,
                            'model': model,
                            'n_jobs': cores,
+                           'x_chains': x_chains,
                            'chains': chains}
 
             _iter_parallel_chains(**sample_args)
@@ -585,7 +547,7 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
             mtrace = stage_handler.load_multitrace(step.stage)
 
             step.population, step.array_population, step.likelihoods = step.select_end_points(
-                mtrace)
+                mtrace, chains)
             step.weights, step.epsilon = step.calc_beta()
 
           
@@ -593,52 +555,94 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
                 pm._log.info('Epsilon {:.4f} < minimum epsilon {:.4f}'.format(step.epsilon, step.minimum_eps))
                 stage_handler.dump_atmip_params(step)
                 if stage == -1:
-                    chains = []
+                    x_chains = []
                 else:
-                    chains = None
+                    x_chains = None
             else:
                 step.covariance = step.calc_covariance()
                 step.proposal_dist = choose_proposal(step.proposal_name, scale=step.covariance)
                 step.resampling_indexes = step.resample()
+                step.chain_previous_lpoint = step.get_chain_previous_lpoint(mtrace, chains)
                 stage_handler.dump_atmip_params(step)
 
                 step.stage += 1
-                #del(mtrace) #################################?????
 
         # Metropolis sampling final stage
         pm._log.info('Sample final stage')
         step.stage = -1
-        chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
+        x_chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
         weights_un = step.likelihoods
         step.weights = weights_un / np.sum(weights_un)
         step.covariance = step.calc_covariance()
         step.proposal_dist = choose_proposal(step.proposal_name, scale=step.covariance)
         step.resampling_indexes = step.resample()
-        step.chain_previous_lpoint = step.get_chain_previous_lpoint(mtrace)
+        step.chain_previous_lpoint = step.get_chain_previous_lpoint(mtrace, chains)
 
 
-        if samples < n_chains:
-            samples = 1
-        else:
-            samples = int(samples / n_chains)
-        sample_args['draws'] = samples
+        x_chains = nr.randint(0, chains, size=samples)
+
+        sample_args['draws'] = step.n_steps_final
         sample_args['step'] = step
         sample_args['stage_path'] = stage_handler.stage_path(step.stage)
-        sample_args['chains'] = chains
+        sample_args['x_chains'] = x_chains
         _iter_parallel_chains(**sample_args)
 
         stage_handler.dump_atmip_params(step)
 
         return stage_handler.create_result_trace(step.stage,
-                                                 idxs=range(samples),
                                                  step=step,
                                                  model=model)
 
 
-def _sample(draws, step=None, start=None, trace=None, chain=0, progressbar=True, model=None,
-            random_seed=-1):
+def _initial_population(samples, chains, model, variables):
+    """
+    Create an initial population from the prior
+    """
+    population = []
+    init_rnd = {}
+    start = model.test_point
+    for v in variables:
+        if pm.util.is_transformed_name(v.name):
+            trans = v.distribution.transform_used.forward_val
+            init_rnd[v.name] = trans(v.distribution.dist.random(size=chains, point=start))
+        else:
+            init_rnd[v.name] = v.random(size=chains, point=start)
 
-    sampling = _iter_sample(draws, step, start, trace, chain, model, random_seed)
+    for i in range(chains):
+        population.append(pm.Point({v.name: init_rnd[v.name][i] for v in variables}, model=model))
+
+    return population
+
+def _calc_epsilon(epsilons, population, vars, iqr_scale, stage):
+    """[summary]
+    
+    [description]
+    
+    Arguments:
+        epsilons {[type]} -- [description]
+        population {[type]} -- [description]
+        vars {[type]} -- [description]
+        iqr_scale {[type]} -- [description]
+        stage {[type]} -- [description]
+    
+    Returns:
+        [type] -- [description]
+    """
+
+    if epsilons is None:
+        range_iq = mquantiles([d[str(v)] for d in population for v in vars], 
+                                  prob=[0.25, 0.75])
+        epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
+    else:
+        epsilon = epsilons[stage]
+
+    return epsilon
+
+
+def _sample(draws, step=None, start=None, trace=None, chain=0, progressbar=True, model=None,
+            random_seed=-1, chain_idx=0):
+
+    sampling = _iter_sample(draws, step, start, trace, chain, model, random_seed, chain_idx)
 
     if progressbar:
         sampling = tqdm(sampling, total=draws)
@@ -653,8 +657,10 @@ def _sample(draws, step=None, start=None, trace=None, chain=0, progressbar=True,
     return chain
 
 
-def _iter_sample(draws, step, start=None, trace=None, chain=0, model=None, random_seed=-1):
-    """Modified from :func:`pymc3.sampling._iter_sample` to be more efficient with SMC algorithm."""
+def _iter_sample(draws, step, start=None, trace=None, chain=0, model=None, random_seed=-1, chain_idx=0):
+    """
+    Modified from :func:`pymc3.sampling._iter_sample` to be more efficient with SMC algorithm.
+    """
     model = modelcontext(model)
     draws = int(draws)
     if draws < 1:
@@ -673,7 +679,7 @@ def _iter_sample(draws, step, start=None, trace=None, chain=0, model=None, rando
 
     point = pm.Point(start, model=model)
     step.chain_index = chain
-    trace.setup(draws, chain)
+    trace.setup(draws, chain_idx)
     for i in range(draws):
         point, out_list = step.step(point)
         trace.record(out_list)
@@ -697,19 +703,22 @@ def _work_chain(work):
     return _sample(*work)
 
 
-def _iter_parallel_chains(draws, step, stage_path, progressbar, model, n_jobs, chains=None):
-    """Do Metropolis sampling over all the chains with each chain being sampled 'draws' times.
+def _iter_parallel_chains(draws, step, stage_path, progressbar, model, n_jobs, chains,
+                          x_chains=None):
+    """Do Metropolis sampling over all the x_chains with each chain being sampled 'draws' times.
     Parallel execution according to n_jobs.
     """
-    if chains is None:
-        chains = range(step.n_chains)
+    if x_chains is None:
+        x_chains = range(chains)
 
+    chain_idx = range(0, len(x_chains))
     pm._log.info('Initializing chain traces ...')
 
     max_int = np.iinfo(np.int32).max
-    random_seeds = nr.randint(1, max_int, size=len(chains))
 
+    random_seeds = nr.randint(1, max_int, size=len(x_chains))
     pm._log.info('Sampling ...')
+
     work = [(draws,
              step,
              step.population[step.resampling_indexes[chain]],
@@ -717,8 +726,8 @@ def _iter_parallel_chains(draws, step, stage_path, progressbar, model, n_jobs, c
              chain,
              False,
              model,
-             rseed) for chain, rseed in
-            zip(chains, random_seeds)]
+             rseed,
+             chain_idx) for chain, rseed, chain_idx in zip(x_chains, random_seeds, chain_idx)]
 
     if draws < 10:
         chunksize = n_jobs
@@ -728,11 +737,10 @@ def _iter_parallel_chains(draws, step, stage_path, progressbar, model, n_jobs, c
     p = atext.paripool(_work_chain, work, chunksize=chunksize, nprocs=n_jobs)
 
     if n_jobs == 1 and progressbar:
-        p = tqdm(p, total=len(chains))
+        p = tqdm(p, total=len(x_chains))
 
     for _ in p:
         pass
-
 
 def tune(acc_rate):
     """Tune adaptively based on the acceptance rate.
