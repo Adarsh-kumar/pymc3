@@ -371,8 +371,20 @@ class SMC(atext.ArrayStepSharedLLK):
 def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                progressbar=False, model=None, random_seed=-1, rm_flag=True, **kwargs):
     """Sequential Monte Carlo sampling
+<<<<<<< HEAD
     Samples the parameter space using a `chains` number of parallel Metropolis chains.
     Once finished, the sampled traces are evaluated:
+=======
+<<<<<<< HEAD
+    Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
+    iterations. Once finished, the sampled traces are evaluated:
+=======
+
+    Samples the parameter space using a `chains` number of parallel Metropolis chains.
+    Once finished, the sampled traces are evaluated:
+
+>>>>>>> d7374f5b0cf130f0b71ec95644d6a2c9d555ad8b
+>>>>>>> 279ed92d397b1f85d153e928dd9b73221932a71f
     (1) Based on the likelihoods of the final samples, chains are weighted
     (2) the weighted covariance of the ensemble is calculated and set as new proposal distribution
     (3) the variation in the ensemble is calculated and also the next tempering parameter (`beta`)
