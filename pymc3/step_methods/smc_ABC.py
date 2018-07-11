@@ -1,5 +1,4 @@
-"""Sequential Monte Carlo sampler also known as
-Adaptive Transitional Markov Chain Monte Carlo sampler.
+"""Sequential Monte Carlo for Approximate Bayesian Computation
 
 Runs on any pymc3 model.
 
@@ -37,7 +36,7 @@ from ..backends import smc_text as atext
 
 __all__ = ['SMC_ABC', 'sample_smc_abc']
 
-EXPERIMENTAL_WARNING = ("Warning: SMC is an experimental step method, and not yet "
+EXPERIMENTAL_WARNING = ("Warning: SMC-ABC is an experimental step method, and not yet "
                         "recommended for use in PyMC3!")
 
 
@@ -642,34 +641,33 @@ def _calc_epsilon(epsilons, population, vars, iqr_scale, stage):
 
     return epsilon
 
-def sum_stats(observed, sum_stat=None):
+def sum_stats(data, sum_stat=None):
     """
     Parameters:
     -----------
-    observed : array
-        Observed data
+    data : array
+        Observed or simulated data
     sum_stat : list
-        List of summary statistics to be computed. Accepted strings are mean, std, variance. 
+        List of summary statistics to be computed. Accepted strings are mean, std, var. 
         Python functions can be passed in this argument.
         
     Returns:
     --------
-    obs_stats : array
-        Two arrays contaning the summary statistics for each set of data.
+    sum_stat_vector : array
+        Array contaning the summary statistics.
     """
     
-    allowed_stats = ['mean', 'std', 'variance']
-    sum_stat_vector = np.zeros((len(sum_stat), observed.shape[1]))
+    sum_stat_vector = np.zeros((len(sum_stat), data.shape[1]))
     
     for i, stat in enumerate(sum_stat):
         if stat == 'mean':
-            sum_stat_vector[i, 0] =  observed.mean()
+            sum_stat_vector[i, 0] =  data.mean()
         elif stat == 'std':
-            sum_stat_vector[i, 0] =  observed.std()
+            sum_stat_vector[i, 0] =  data.std()
         elif stat == 'var':
-            sum_stat_vector[i, 0] =  observed.var()
+            sum_stat_vector[i, 0] =  data.var()
         else:
-            sum_stat_vector[i, 0] =  stat(observed)
+            sum_stat_vector[i, 0] =  stat(data)
             
     return sum_stat_vector
 
