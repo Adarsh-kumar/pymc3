@@ -139,7 +139,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
     def __init__(self, vars=None, out_vars=None, samples=1000, chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 epsilons=None, minimum_eps=0.5, observed=None, iqr_scale=0.5):
+                 epsilons=None, minimum_eps=0.5, observed=None, iqr_scale=0.5, sum_stats_list=['mean']):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -193,7 +193,8 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.observed = observed
 
         self.all_sum_stats = []
-        self.sum_stat = 0 
+        self.sum_stat_sim = 0 
+        self.sum_stats_list = sum_stats_list
         self.minimum_eps = minimum_eps
         self.iqr_scale = iqr_scale
         self.epsilons = epsilons
@@ -232,14 +233,14 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         """
         observed = self.observed
         size = len(observed) 
-        scale = observed.std()
-        mean = observed.mean()
+        scale = sum_stats(observed, sum_stat=['std'])
+        mean = sum_stats(observed, sum_stat=self.sum_stats_list)
         epsilon = self.epsilon
         if self.stage == 0:
             logp_prior = self.logp_forw(q0)
             l_new = [q0, np.exp(logp_prior[1])]
             q_new = q0
-            sum_stat = self.sum_stat
+            sum_stat_sim = self.sum_stat_sim
 
         # tuning step
         else:
@@ -253,9 +254,9 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
                 delta = self.proposal_dist(1)[0,0]
                 q_prop = q0 + delta
                 #print(q0, delta)
-                y_q = np.random.normal(loc=q_prop, scale=scale, size=size) # simulator
-                sum_stat = y_q.mean()
-                if abs(mean - sum_stat) < epsilon: # distance function, summary statistic
+                y_q = np.random.normal(loc=q_prop, scale=scale[0], size=size).reshape(1000, 1) # simulator
+                sum_stat_sim = sum_stats(y_q, sum_stat=self.sum_stats_list)
+                if abs(mean - sum_stat_sim) < epsilon: # distance function, summary statistic
                     q_new = q_prop
                     logp_prior = self.logp_forw(q_new)[1]
                     s = self.covariance * self.scaling
@@ -266,9 +267,9 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
                 else:
                     q_new = q0
                     l_new = self.chain_previous_lpoint[self.chain_index]
-                self.all_sum_stats.append(sum_stat)
+                self.all_sum_stats.append(sum_stat_sim)
 
-        return q_new, l_new, sum_stat
+        return q_new, l_new, sum_stat_sim
 
     def calc_beta(self):
         """Calculate next tempering beta and importance weights based on current beta and sample
@@ -519,6 +520,9 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
     else:
         step.population = _initial_population(samples, chains, model, step.vars)
     step.epsilon = _calc_epsilon(step.epsilons, step.population, step.vars, step.iqr_scale, step.stage)
+    
+    pm._log.info('Using {} as summary statistic...'.format(step.sum_stats_list))
+
     with model:
         while step.epsilon > step.minimum_eps:
         #for step.epsilon in step.epsilons:
@@ -637,6 +641,37 @@ def _calc_epsilon(epsilons, population, vars, iqr_scale, stage):
         epsilon = epsilons[stage]
 
     return epsilon
+
+def sum_stats(observed, sum_stat=None):
+    """
+    Parameters:
+    -----------
+    observed : array
+        Observed data
+    sum_stat : list
+        List of summary statistics to be computed. Accepted strings are mean, std, variance. 
+        Python functions can be passed in this argument.
+        
+    Returns:
+    --------
+    obs_stats : array
+        Two arrays contaning the summary statistics for each set of data.
+    """
+    
+    allowed_stats = ['mean', 'std', 'variance']
+    sum_stat_vector = np.zeros((len(sum_stat), observed.shape[1]))
+    
+    for i, stat in enumerate(sum_stat):
+        if stat == 'mean':
+            sum_stat_vector[i, 0] =  observed.mean()
+        elif stat == 'std':
+            sum_stat_vector[i, 0] =  observed.std()
+        elif stat == 'var':
+            sum_stat_vector[i, 0] =  observed.var()
+        else:
+            sum_stat_vector[i, 0] =  stat(observed)
+            
+    return sum_stat_vector
 
 
 def _sample(draws, step=None, start=None, trace=None, chain=0, progressbar=True, model=None,
