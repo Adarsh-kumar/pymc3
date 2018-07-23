@@ -138,7 +138,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
     def __init__(self, vars=None, out_vars=None, samples=1000, chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 epsilons=None, minimum_eps=0.5, observed=None, iqr_scale=0.5, sum_stats_list=['mean']):
+                 epsilons=None, minimum_eps=0.5, iqr_scale=0.5, sum_stats_list=['mean']):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -161,7 +161,6 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
                 pm._log.info('Using present model likelihood!')
 
             out_vars = model.unobserved_RVs
-
         out_varnames = [out_var.name for out_var in out_vars]
 
         if covariance is None and proposal_name == 'MultivariateNormal':
@@ -176,7 +175,6 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.proposal_dist = choose_proposal(self.proposal_name, scale=scale)
 
         self.scaling = np.atleast_1d(scaling)
-        self.check_bnd = check_bound
         self.tune_interval = tune_interval
         self.steps_until_tune = tune_interval
 
@@ -189,14 +187,20 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.n_steps = n_steps
         self.stage_sample = 0
         self.accepted = 0
-        self.observed = observed
 
         self.all_sum_stats = []
         self.sum_stat_sim = 0 
         self.sum_stats_list = sum_stats_list
         self.minimum_eps = minimum_eps
-        self.iqr_scale = iqr_scale
         self.epsilons = epsilons
+        if epsilons is not None:
+            self.epsilons.append(minimum_eps)
+        self.iqr_scale = iqr_scale
+
+        epsilon = model.observed_RVs[0].distribution.epsilon
+        epsilon.set_value(1)
+
+        self.epsilon = epsilon
         self.stage = 0
         self.chain_index = 0
         self.resampling_indexes = np.arange(chains)
@@ -213,9 +217,8 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
 
 
         shared = make_shared_replacements(self.vars, model)
-        self.logp_forw = logp_forw(out_vars, self.vars, shared)
-        self.check_bnd = logp_forw([model.varlogpt], self.vars, shared)
-        
+
+        self.logp_forw = logp_forw(out_vars, self.vars, shared)        
 
         super(SMC_ABC, self).__init__(self.vars, out_vars, shared, epsilons)
 
@@ -230,45 +233,30 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         Returns:
             [type] -- [description]
         """
-        observed = self.observed
-        size = len(observed) 
-        scale = sum_stats(observed, sum_stat=['std'])
-        mean = sum_stats(observed, sum_stat=self.sum_stats_list)
         epsilon = self.epsilon
+
         if self.stage == 0:
-            logp_prior = self.logp_forw(q0)
-            l_new = [q0, np.exp(logp_prior[1])]
+            l_new = self.logp_forw(q0)
+            l_new[self._llk_index] = np.exp(l_new[self._llk_index])
             q_new = q0
-            sum_stat_sim = self.sum_stat_sim
-
-        # tuning step
         else:
-            #delta = self.proposal_samples_array[self.stage_sample, :] * self.scaling
-            #accepted = self.accepted
-
-            #print(accepted, self.n_steps)
-            #for _ in range(self.n_steps):
-            #while True:
             for _ in range(5000):
                 delta = self.proposal_dist(1)[0,0]
                 q_prop = q0 + delta
-                #print(q0, delta)
-                y_q = np.random.normal(loc=q_prop, scale=scale[0], size=size).reshape(1000, 1) # simulator
-                sum_stat_sim = sum_stats(y_q, sum_stat=self.sum_stats_list)
-                if abs(mean - sum_stat_sim) < epsilon: # distance function, summary statistic
+                l_new = self.logp_forw(q_prop)#[self._llk_index]
+                logp_prior = l_new[self._llk_index]
+
+                if np.isfinite(logp_prior):
                     q_new = q_prop
-                    logp_prior = self.logp_forw(q_new)[1]
                     s = self.covariance * self.scaling
                     logp_proposal = self.proposal_dist.logp(s, q_new)
-                    l_new = [q_new, np.exp(logp_prior - logp_proposal)]
+                    l_new[self._llk_index] = np.exp(logp_prior - logp_proposal)
                     self.chain_previous_lpoint[self.chain_index] = l_new
                     break
                 else:
                     q_new = q0
                     l_new = self.chain_previous_lpoint[self.chain_index]
-                self.all_sum_stats.append(sum_stat_sim)
-
-        return q_new, l_new, sum_stat_sim
+        return q_new, l_new
 
     def calc_beta(self):
         """Calculate next tempering beta and importance weights based on current beta and sample
@@ -280,10 +268,15 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
             Importance weights (floats)
         epsilon : 
         """
+        self.likelihoods = np.ones_like(self.likelihoods)
         weights_un = self.likelihoods
         weights = weights_un / np.sum(weights_un)
         epsilon = _calc_epsilon(self.epsilons, self.population, self.vars, 
                                                self.iqr_scale, self.stage)
+        """
+        actualizar self.epsilon, como epsilon.set_value(), return epsilon
+        
+        """
         return weights, epsilon
 
     def calc_covariance(self):
@@ -551,9 +544,9 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
 
             step.population, step.array_population, step.likelihoods = step.select_end_points(
                 mtrace, chains)
+
             step.weights, step.epsilon = step.calc_beta()
 
-          
             if step.epsilon < step.minimum_eps:
                 pm._log.info('Epsilon {:.4f} < minimum epsilon {:.4f}'.format(step.epsilon, step.minimum_eps))
                 stage_handler.dump_atmip_params(step)
