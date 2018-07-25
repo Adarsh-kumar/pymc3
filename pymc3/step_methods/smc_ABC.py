@@ -57,7 +57,7 @@ class MultivariateNormalProposal(Proposal):
             return np.dot(self.chol, b)
 
     def logp(self, s, value):
-        return multivariate_normal(0, cov=s).logpdf(value)
+        return multivariate_normal(np.zeros(s.shape[0]), cov=s).logpdf(value)
 
 proposal_dists = {'MultivariateNormal': MultivariateNormalProposal}
 
@@ -138,7 +138,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
     def __init__(self, vars=None, out_vars=None, samples=1000, chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 epsilons=None, minimum_eps=0.5, iqr_scale=0.5, sum_stats_list=['mean']):
+                 epsilons=None, minimum_eps=0.5, iqr_scale=1):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -188,19 +188,14 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.stage_sample = 0
         self.accepted = 0
 
-        self.all_sum_stats = []
-        self.sum_stat_sim = 0 
-        self.sum_stats_list = sum_stats_list
         self.minimum_eps = minimum_eps
         self.epsilons = epsilons
         if epsilons is not None:
             self.epsilons.append(minimum_eps)
+        self.epsilon = model.observed_RVs[0].distribution.epsilon
+        self.previous_epsilon = np.inf
         self.iqr_scale = iqr_scale
 
-        epsilon = model.observed_RVs[0].distribution.epsilon
-        epsilon.set_value(1)
-
-        self.epsilon = epsilon
         self.stage = 0
         self.chain_index = 0
         self.resampling_indexes = np.arange(chains)
@@ -233,11 +228,9 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         Returns:
             [type] -- [description]
         """
-        epsilon = self.epsilon
-
         if self.stage == 0:
             l_new = self.logp_forw(q0)
-            l_new[self._llk_index] = np.exp(l_new[self._llk_index])
+            #l_new[self._llk_index] = np.exp(l_new[self._llk_index])
             q_new = q0
         else:
             for _ in range(5000):
@@ -250,7 +243,8 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
                     q_new = q_prop
                     s = self.covariance * self.scaling
                     logp_proposal = self.proposal_dist.logp(s, q_new)
-                    l_new[self._llk_index] = np.exp(logp_prior - logp_proposal)
+                    #l_new[self._llk_index] = np.exp(logp_prior - logp_proposal)
+                    l_new[self._llk_index] = logp_prior - logp_proposal
                     self.chain_previous_lpoint[self.chain_index] = l_new
                     break
                 else:
@@ -268,15 +262,24 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
             Importance weights (floats)
         epsilon : 
         """
-        self.likelihoods = np.ones_like(self.likelihoods)
-        weights_un = self.likelihoods
+            
+        if self.epsilons is None:
+            range_iq = mquantiles([d[str(v)] for d in self.population for v in self.vars], 
+                                      prob=[0.25, 0.75])
+            
+            epsilon = np.abs(range_iq[1] - range_iq[0]) * self.iqr_scale
+            if self.previous_epsilon < epsilon:
+                epsilon = self.previous_epsilon
+        else:
+            epsilon = self.epsilons[self.stage]
+
+        self.epsilon.set_value(epsilon)
+        self.previous_epsilon = epsilon
+
+        #self.likelihoods = np.ones_like(self.likelihoods)
+        weights_un = np.exp(self.likelihoods - self.likelihoods.max())
         weights = weights_un / np.sum(weights_un)
-        epsilon = _calc_epsilon(self.epsilons, self.population, self.vars, 
-                                               self.iqr_scale, self.stage)
-        """
-        actualizar self.epsilon, como epsilon.set_value(), return epsilon
-        
-        """
+        #print('weights', weights)
         return weights, epsilon
 
     def calc_covariance(self):
@@ -287,6 +290,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         cov : :class:`numpy.ndarray`
             weighted covariances (NumPy > 1.10. required)
         """
+        #print(self.weights)
         cov = np.cov(self.array_population, aweights=self.weights.ravel(), bias=False, rowvar=0)
         if np.isnan(cov).any() or np.isinf(cov).any():
             raise ValueError('Sample covariances not valid! Likely "chains" is too small!')
@@ -511,12 +515,13 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
             step.population = start
     else:
         step.population = _initial_population(samples, chains, model, step.vars)
-    step.epsilon = _calc_epsilon(step.epsilons, step.population, step.vars, step.iqr_scale, step.stage)
+    step.weights, epsilon = step.calc_beta()
+    step.epsilon.set_value(np.inf)
     
-    pm._log.info('Using {} as summary statistic...'.format(step.sum_stats_list))
+    #pm._log.info('Using {} as summary statistic...'.format(step.sum_stats_list))
 
     with model:
-        while step.epsilon > step.minimum_eps:
+        while epsilon > step.minimum_eps:
         #for step.epsilon in step.epsilons:
             if step.stage == 0:
                 # Initial stage
@@ -524,8 +529,7 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
                 draws = 1
             else:
                 draws = step.n_steps
-
-            pm._log.info('Epsilon: {:.4f} Stage: {}'.format(step.epsilon, step.stage))
+                pm._log.info('Epsilon: {:.4f} Stage: {}'.format(epsilon, step.stage))
 
             # Metropolis sampling intermediate stages
             x_chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
@@ -545,10 +549,10 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
             step.population, step.array_population, step.likelihoods = step.select_end_points(
                 mtrace, chains)
 
-            step.weights, step.epsilon = step.calc_beta()
+            step.weights, epsilon = step.calc_beta()
 
-            if step.epsilon < step.minimum_eps:
-                pm._log.info('Epsilon {:.4f} < minimum epsilon {:.4f}'.format(step.epsilon, step.minimum_eps))
+            if epsilon < step.minimum_eps:
+                pm._log.info('Epsilon {:.4f} < minimum epsilon {:.4f}'.format(epsilon, step.minimum_eps))
                 stage_handler.dump_atmip_params(step)
                 if stage == -1:
                     x_chains = []
@@ -567,7 +571,7 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
         pm._log.info('Sample final stage')
         step.stage = -1
         x_chains = stage_handler.clean_directory(step.stage, chains, rm_flag)
-        weights_un = step.likelihoods
+        weights_un = np.exp(step.likelihoods - step.likelihoods.max())
         step.weights = weights_un / np.sum(weights_un)
         step.covariance = step.calc_covariance()
         step.proposal_dist = choose_proposal(step.proposal_name, scale=step.covariance)
@@ -608,61 +612,6 @@ def _initial_population(samples, chains, model, variables):
         population.append(pm.Point({v.name: init_rnd[v.name][i] for v in variables}, model=model))
 
     return population
-
-def _calc_epsilon(epsilons, population, vars, iqr_scale, stage):
-    """[summary]
-    
-    [description]
-    
-    Arguments:
-        epsilons {[type]} -- [description]
-        population {[type]} -- [description]
-        vars {[type]} -- [description]
-        iqr_scale {[type]} -- [description]
-        stage {[type]} -- [description]
-    
-    Returns:
-        [type] -- [description]
-    """
-
-    if epsilons is None:
-        range_iq = mquantiles([d[str(v)] for d in population for v in vars], 
-                                  prob=[0.25, 0.75])
-        epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
-    else:
-        epsilon = epsilons[stage]
-
-    return epsilon
-
-def sum_stats(data, sum_stat=None):
-    """
-    Parameters:
-    -----------
-    data : array
-        Observed or simulated data
-    sum_stat : list
-        List of summary statistics to be computed. Accepted strings are mean, std, var. 
-        Python functions can be passed in this argument.
-        
-    Returns:
-    --------
-    sum_stat_vector : array
-        Array contaning the summary statistics.
-    """
-    
-    sum_stat_vector = np.zeros((len(sum_stat), data.shape[1]))
-    
-    for i, stat in enumerate(sum_stat):
-        if stat == 'mean':
-            sum_stat_vector[i, 0] =  data.mean()
-        elif stat == 'std':
-            sum_stat_vector[i, 0] =  data.std()
-        elif stat == 'var':
-            sum_stat_vector[i, 0] =  data.var()
-        else:
-            sum_stat_vector[i, 0] =  stat(data)
-            
-    return sum_stat_vector
 
 
 def _sample(draws, step=None, start=None, trace=None, chain=0, progressbar=True, model=None,
