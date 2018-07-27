@@ -5,31 +5,6 @@ from .distribution import NoDistribution, Distribution
 
 __all__ = ['Simulator']
 
-def absolute_difference(a, b):
-    return np.abs(a - b)
-
-def sum_of_squared_distance(a, b):
-    return (a - b)**2
-
-def mean_absolute_error(a, b):
-    return np.abs(a - b)
-
-def mean_squared_error(a, b):
-    return (a - b)**2
-
-def euclidean_distance(a, b):
-    return np.sqrt((a - b)**2)
-
-def get_distance(func_name):
-    d = {'absolute_difference': absolute_difference,
-         'sum_of_squared_distance' : sum_of_squared_distance,
-         'mean_absolute_error' : mean_absolute_error,
-         'mean_squared_error' : mean_squared_error,
-         'euclidean_distance' : euclidean_distance}
-    for key, value in d.items():
-        if func_name == key:
-            return value
-
 class Simulator(NoDistribution):
 
     def __init__(self, function, parameters, sum_stat=None, distance_metric=None, *args, **kwargs):
@@ -77,9 +52,10 @@ class Simulator(NoDistribution):
         """
         parameters = self.parameters
         epsilon = self.epsilon
-        simulated_stat = self.function(*parameters)
+        simulated = self.function(*parameters)
+        #simulated_stat = get_sum_stats(simulated, sum_stat=self.sum_stat)
         distance_function = get_distance(self.distance_metric)
-        distance = distance_function(self.sum_stat_value[0, 0], simulated_stat)
+        distance = distance_function(self.sum_stat_value, simulated)
         logp = tt.switch(tt.le(distance, epsilon) , 0, -np.inf)
 
         return logp
@@ -109,9 +85,10 @@ def get_sum_stats(data, sum_stat=None):
     sum_stat_vector : array
         Array contaning the summary statistics.
     """
-
+    if data.ndim == 1:
+        data = data[:,np.newaxis]
     sum_stat_vector = np.zeros((len(sum_stat), data.shape[1]))
-    
+
     for i, stat in enumerate(sum_stat):
         for j in range(sum_stat_vector.shape[1]):
             if stat == 'mean':
@@ -123,4 +100,29 @@ def get_sum_stats(data, sum_stat=None):
             else:
                 sum_stat_vector[i, j] =  stat(data[:,j])
 
-    return sum_stat_vector
+    return np.atleast_1d(np.squeeze(sum_stat_vector))
+
+def absolute_difference(a, b):
+    return tt.sum(np.abs(a - b))
+
+def sum_of_squared_distance(a, b):
+    return tt.sum((a - b)**2)
+
+def mean_absolute_error(a, b):
+    return tt.sum(np.abs(a - b))/len(a)
+
+def mean_squared_error(a, b):
+    return tt.sum((a - b)**2)/len(a)
+
+def euclidean_distance(a, b):
+    return np.sqrt(tt.sum((a - b)**2))
+
+def get_distance(func_name):
+    d = {'absolute_difference': absolute_difference,
+         'sum_of_squared_distance' : sum_of_squared_distance,
+         'mean_absolute_error' : mean_absolute_error,
+         'mean_squared_error' : mean_squared_error,
+         'euclidean' : euclidean_distance}
+    for key, value in d.items():
+        if func_name == key:
+            return value

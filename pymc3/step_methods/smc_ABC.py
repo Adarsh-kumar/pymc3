@@ -138,7 +138,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
     def __init__(self, vars=None, out_vars=None, samples=1000, chains=100, n_steps=25, scaling=1.,
                  covariance=None, likelihood_name='l_like__', proposal_name='MultivariateNormal',
                  tune_interval=10, threshold=0.5, check_bound=True, model=None, random_seed=-1, 
-                 epsilons=None, minimum_eps=0.5, iqr_scale=1):
+                 epsilons=None, minimum_eps=0.5, maximum_eps=10):
 
         warnings.warn(EXPERIMENTAL_WARNING)
 
@@ -189,12 +189,13 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         self.accepted = 0
 
         self.minimum_eps = minimum_eps
+        self.maximum_eps = maximum_eps
+        self.acc_rate = 1
         self.epsilons = epsilons
         if epsilons is not None:
             self.epsilons.append(minimum_eps)
         self.epsilon = model.observed_RVs[0].distribution.epsilon
-        self.previous_epsilon = np.inf
-        self.iqr_scale = iqr_scale
+        #self.iqr_scale = iqr_scale
 
         self.stage = 0
         self.chain_index = 0
@@ -228,12 +229,13 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         Returns:
             [type] -- [description]
         """
+        rejected = 0
         if self.stage == 0:
             l_new = self.logp_forw(q0)
             #l_new[self._llk_index] = np.exp(l_new[self._llk_index])
             q_new = q0
         else:
-            for _ in range(5000):
+            while True:
                 delta = self.proposal_dist(1)[0,0]
                 q_prop = q0 + delta
                 l_new = self.logp_forw(q_prop)#[self._llk_index]
@@ -248,8 +250,14 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
                     self.chain_previous_lpoint[self.chain_index] = l_new
                     break
                 else:
-                    q_new = q0
-                    l_new = self.chain_previous_lpoint[self.chain_index]
+                    rejected += 1
+        if rejected == 0:
+            self.acc_rate = 1
+        else:
+            self.acc_rate = 1/rejected
+                #else:
+                #    q_new = q0
+                #    l_new = self.chain_previous_lpoint[self.chain_index]
         return q_new, l_new
 
     def calc_beta(self):
@@ -264,22 +272,22 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
         """
             
         if self.epsilons is None:
-            range_iq = mquantiles([d[str(v)] for d in self.population for v in self.vars], 
-                                      prob=[0.25, 0.75])
+            epsilon = self.maximum_eps * 0.25 ** self.acc_rate
+            #range_iq = mquantiles([d[str(v)] for d in self.population for v in self.vars], 
+            #                          prob=[0.25, 0.75])
             
-            epsilon = np.abs(range_iq[1] - range_iq[0]) * self.iqr_scale
-            if self.previous_epsilon < epsilon:
-                epsilon = self.previous_epsilon
+            #epsilon = np.abs(range_iq[1] - range_iq[0]) * self.iqr_scale
+            #if self.previous_epsilon < epsilon:
+            #    epsilon = self.previous_epsilon
         else:
             epsilon = self.epsilons[self.stage]
 
         self.epsilon.set_value(epsilon)
-        self.previous_epsilon = epsilon
+        self.maximum_eps = epsilon
 
         #self.likelihoods = np.ones_like(self.likelihoods)
         weights_un = np.exp(self.likelihoods - self.likelihoods.max())
         weights = weights_un / np.sum(weights_un)
-        #print('weights', weights)
         return weights, epsilon
 
     def calc_covariance(self):
@@ -398,7 +406,7 @@ class SMC_ABC(atext.ArrayStepSharedLLK):
 
 def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=None, stage=0, cores=1,
                tune_interval=10, progressbar=False, model=None, random_seed=-1, rm_flag=True, 
-               minimum_eps=None, **kwargs):
+               minimum_eps=None, maximum_eps=1000,**kwargs):
     """Sequential Monte Carlo sampling
 
     Samples the solution space with `chains` of Metropolis chains, where each chain has `n_steps`=`samples`/`chains`
@@ -542,7 +550,7 @@ def sample_smc_abc(samples=1000, chains=100, step=None, start=None, homepath=Non
                            'x_chains': x_chains,
                            'chains': chains}
 
-            _iter_parallel_chains(**sample_args)
+            step.acc_rate = _iter_parallel_chains(**sample_args)
 
             mtrace = stage_handler.load_multitrace(step.stage)
 
@@ -714,8 +722,12 @@ def _iter_parallel_chains(draws, step, stage_path, progressbar, model, n_jobs, c
     if n_jobs == 1 and progressbar:
         p = tqdm(p, total=len(x_chains))
 
+
+    acc_rates = []
     for _ in p:
+        acc_rates.append(step.acc_rate)
         pass
+    return np.mean(acc_rates)
 
 def tune(acc_rate):
     """Tune adaptively based on the acceptance rate.
