@@ -144,12 +144,13 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         # Apply Rejection kernel (mutation)
         proposed = 0.
         accepted = 0.
+        new_posterior_list = []
+        proposal_list = []
         for draw in tqdm(range(draws), disable=not progressbar):
             q_old = posterior[draw]
             deltas = np.squeeze(proposal(step.n_steps) * step.scaling)
             for n_step in range(0, step.n_steps):
                 delta = deltas[n_step]
-
                 if any_discrete:
                     if all_discrete:
                         delta = np.round(delta, 0).astype('int64')
@@ -161,27 +162,29 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
                 else:
                     q_new = q_old + delta
 
-                new_posterior = []
-                proposal_list = []
                 epsilon = epsilon_list[stage]
                 simulated_stat = get_sum_stats(function(*q_new), sum_stat=step.sum_stat)
 
                 if distance_function(simulated_stat, sum_stat_observed) < epsilon:
                     accepted += 1.
-                    new_posterior.append(q_new)
+                    new_posterior_list.append(q_new)
                     proposal_list.append(proposal.logp(covariance * step.scaling, q_new))
                 else:
-                    new_posterior.append(q_old)
+                    new_posterior_list.append(q_old)
                     proposal_list.append(proposal.logp(covariance * step.scaling, q_old))
                 proposed += 1.
-        resampling_indexes = np.random.choice(np.arange(len(new_posterior)), size=draws)
-        new_posterior = np.array(new_posterior)
-        posterior = new_posterior[resampling_indexes]
-        proposal_list = np.array(proposal_list)
-        proposal_list = proposal_list[resampling_indexes]
+        pm._log.info('Sampling stage {} with Epsilon {:f}'.format(stage, epsilon))
 
+        new_posterior = np.array(new_posterior_list)
+        resampling_indexes = np.random.choice(np.arange(len(new_posterior)), size=draws)
+
+        posterior = new_posterior[resampling_indexes]
+        proposal_array = np.array(proposal_list)
+        proposal_array = proposal_array[resampling_indexes]
+
+        #posterior_list.append()
         priors = np.array([prior_logp(*sample) for sample in posterior])
-        un_weights = priors - proposal_list
+        un_weights = priors - proposal_array
         acc_rate = accepted / proposed
         stage += 1
 
