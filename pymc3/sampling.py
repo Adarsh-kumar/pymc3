@@ -326,18 +326,11 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
         if cores is None:
             cores = 1
         test_folder = mkdtemp(prefix='SMC_TEST')
-        trace = smc.sample_smc(samples=draws,
-                               chains=chains,
+        trace = smc.sample_smc(draws=draws,   
                                step=step,
-                               start=start,
-                               homepath=step_kwargs.get('homepath', test_folder),
-                               stage=step_kwargs.get('stage', 0),
-                               cores=cores,
                                progressbar=progressbar,
                                model=model,
-                               random_seed=random_seed,
-                               rm_flag=step_kwargs.get('rm_flag', True),
-                               **kwargs)
+                               random_seed=random_seed)
 
 
     elif isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
@@ -348,21 +341,15 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
         if cores is None:
             cores = 1
         test_folder = mkdtemp(prefix='SMC_TEST')
-        trace = pm.step_methods.smc_ABC.sample_smc_abc(samples=draws,
-                               chains=chains,
+        trace = pm.step_methods.smc_ABC.sample_smc_abc(draws=draws,
                                step=step,
-                               start=start,
-                               homepath=step_kwargs.get('homepath', test_folder),
-                               stage=step_kwargs.get('stage', 0),
-                               cores=cores,
                                progressbar=progressbar,
                                model=model,
                                random_seed=random_seed,
-                               rm_flag=step_kwargs.get('rm_flag', True),
-                               iqr_scale=step_kwargs.get('iqr_scale', None),
-                               observed=step_kwargs.get('observed', None), 
-                               minimum_eps=step_kwargs.get('minimum_eps', None),
-                               epsilons=step_kwargs.get('epsilons', None), 
+                               iqr_scale=step_kwargs.get('iqr_scale', 1),
+                               min_epsilon=step_kwargs.get('min_epsilon', 0.5),
+                               epsilons=step_kwargs.get('epsilons', None),
+                               distance_metric=step_kwargs.get('distance_metric', 'absolute difference'),
                                **kwargs)
 
     else:
