@@ -105,6 +105,12 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
     pm._log.info('Using {} as distance metric'.format(distance_metric))
     pm._log.info('Using {} as summary statistic'.format(step.sum_stat))
 
+    if epsilons is None:
+        epsilon_list = []
+    else:
+        epsilons.append(min_epsilon)
+        epsilon_list = epsilons
+
     while epsilon > min_epsilon:
         if stage == 0:
             pm._log.info('Sample initial stage: ...')
@@ -116,23 +122,18 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         # resample based on plausibility weights (selection)
         resampling_indexes = np.random.choice(np.arange(draws), size=draws, p=weights)
         posterior = posterior[resampling_indexes]
-
         # compute proposal distribution based on weights
         covariance = _calc_covariance(posterior, weights)
         proposal = step.proposal(covariance)
-
         # get distance function
         distance_function = get_distance(distance_metric)
-
         # specify epsilon routine
-        epsilon_list = []
-        if epsilons is None: 
-            for sample in posterior:
-                simulated_data = function(*sample)
-                epsilon_list.append(calc_epsilon(simulated_data, iqr_scale))
-        else:
-            epsilons.append(min_epsilon)
-            epsilon_list = epsilons
+        #epsilon_list = []
+        #if epsilons is None:
+        
+        #else:
+        #epsilons.append(min_epsilon)
+        #epsilon_list = epsilons
         # compute scaling and number of Markov chains steps (optional), based on previous
         # acceptance rate
         #if step.tune and stage > 0:
@@ -146,6 +147,8 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         accepted = 0.
         new_posterior_list = []
         proposal_list = []
+        distance_list = []
+
         for draw in tqdm(range(draws), disable=not progressbar):
             q_old = posterior[draw]
             deltas = np.squeeze(proposal(step.n_steps) * step.scaling)
@@ -162,27 +165,35 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
                 else:
                     q_new = q_old + delta
 
+                simulated_data = function(*q_new)
+                
+                if epsilons is None:
+                    if stage == 0:
+                        simulated_sample = [function(*sample) for sample in posterior[::10]]
+                        epsilon_list.append(calc_epsilon(simulated_sample, iqr_scale))
+                    else:
+                        epsilon = calc_epsilon(distance_list, iqr_scale) * stage ** -0.25
+                        epsilon_list.append(epsilon)
                 epsilon = epsilon_list[stage]
-                simulated_stat = get_sum_stats(function(*q_new), sum_stat=step.sum_stat)
+                simulated_stat = get_sum_stats(simulated_data, sum_stat=step.sum_stat)
+                distance = distance_function(simulated_stat, sum_stat_observed)
 
-                if distance_function(simulated_stat, sum_stat_observed) < epsilon:
+                if distance < epsilon:
                     accepted += 1.
                     new_posterior_list.append(q_new)
                     proposal_list.append(proposal.logp(covariance * step.scaling, q_new))
-                else:
-                    new_posterior_list.append(q_old)
-                    proposal_list.append(proposal.logp(covariance * step.scaling, q_old))
+                    distance_list.append(distance)
+                    break
+                
                 proposed += 1.
-        pm._log.info('Sampling stage {} with Epsilon {:f}'.format(stage, epsilon))
 
+        pm._log.info('Sampling stage {} with Epsilon {:f}'.format(stage, epsilon))
         new_posterior = np.array(new_posterior_list)
         resampling_indexes = np.random.choice(np.arange(len(new_posterior)), size=draws)
 
         posterior = new_posterior[resampling_indexes]
         proposal_array = np.array(proposal_list)
         proposal_array = proposal_array[resampling_indexes]
-
-        #posterior_list.append()
         priors = np.array([prior_logp(*sample) for sample in posterior])
         un_weights = priors - proposal_array
         acc_rate = accepted / proposed
@@ -211,14 +222,11 @@ def _initial_population(samples, model, variables):
 
 
 def calc_epsilon(population, iqr_scale):
-    """Calculate next tempering beta and importance weights based on current beta and sample
-    likelihoods.
+    """Calculate next epsilon threshold based on the current population.
 
     Returns
     -------
-    weights : :class:`numpy.ndarray`
-        Importance weights (floats)
-    epsilon : 
+    epsilon : float
     """
     
     range_iq = mquantiles(population, prob=[0.25, 0.75])
