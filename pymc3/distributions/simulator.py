@@ -7,7 +7,7 @@ __all__ = ['Simulator']
 
 class Simulator(NoDistribution):
 
-    def __init__(self, function, sum_stat=None, distance_metric=None, *args, **kwargs):
+    def __init__(self, function, *args, **kwargs):
    
         self.function = function
         observed = self.data
