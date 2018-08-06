@@ -10,7 +10,7 @@ from tqdm import tqdm
 from .arraystep import metrop_select
 from .metropolis import MultivariateNormalProposal
 from ..theanof import floatX
-from ..model import modelcontext
+from ..model import modelcontext, treelist, FreeRV
 from ..backends.ndarray import NDArray
 from ..backends.base import MultiTrace
 
@@ -35,15 +35,19 @@ class SMC_ABC():
         works if `tune == False` otherwise is determined automatically
     p_acc_rate : float
         Probability of not accepting a Markov Chain proposal. Used to compute `n_steps` when
-        `tune == True`. It should be between 0 and 1.
+        `tune == True`. It should be between 0 and 1.    
+    sum_stat: list
+        List of summary statistics to compute.
+    min_epsilon : float
+        Minimum epsilons threshold that the sampler can reach.
+    iqr_scale : int
+        Scale factor for the inter-quantile range used in epsilon computation.
+    distance_metric : string
+        Distance metric to be computed between summary statistics.
+    epsilons : list
+        Pre-specified list of epsilon thresholds.
     proposal_name :
         Type of proposal distribution. Currently the only valid option is `MultivariateNormal`.
-    threshold : float
-        Determines the change of beta from stage to stage, i.e.indirectly the number of stages,
-        the higher the value of threshold the higher the number of stages. Defaults to 0.5.
-        It should be between 0 and 1.
-    model : :class:`pymc3.Model`
-        Optional model for sampling step. Defaults to None (taken from context).
 
     References
     ----------
@@ -59,7 +63,8 @@ class SMC_ABC():
         %282007%29133:7%28816%29>`__
     """
     def __init__(self, n_steps=5, scaling=1., p_acc_rate=0.01, tune=True, sum_stat=['mean'],
-        proposal_name='MultivariateNormal'):
+        min_epsilon=0.5, iqr_scale=1, distance_metric='absolute difference', epsilons=None, 
+        proposal_name='MultivariateNormal', ):
 
         self.n_steps = n_steps
         self.scaling = scaling
@@ -67,9 +72,12 @@ class SMC_ABC():
         self.tune = tune
         self.proposal = proposal_dists[proposal_name]
         self.sum_stat = sum_stat
+        self.min_epsilon = min_epsilon
+        self.iqr_scale = iqr_scale
+        self. distance_metric = distance_metric
+        self.epsilons = epsilons
 
-def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_seed=-1, 
-    min_epsilon=0.5, iqr_scale=1, distance_metric='absolute difference', epsilons=None):
+def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_seed=-1):
     """
     Sequential Monte Carlo sampling
 
@@ -93,25 +101,29 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         np.random.seed(random_seed)
 
     stage = 0
+    #variables = treelist(set(model.vars).symmetric_difference(model.unobserved_RVs))
+    #print(variables, type(variables),type(variables[0]) )
     variables = model.vars
     discrete = np.concatenate([[v.dtype in pm.discrete_types] * (v.dsize or 1) for v in variables])
     any_discrete = discrete.any()
     all_discrete = discrete.all()
-    prior_logp = theano.function(model.vars, model.varlogpt)
+    prior_logp = theano.function(variables, model.varlogpt)
     simulator = model.observed_RVs[0]
     function = simulator.distribution.function
-    sum_stat_observed = get_sum_stats(simulator.observations, sum_stat=step.sum_stat)
+    observed_sum_stat = get_sum_stats(simulator.observations, sum_stat=step.sum_stat)
     epsilon = np.inf
-    pm._log.info('Using {} as distance metric'.format(distance_metric))
+    pm._log.info('Using {} as distance metric'.format(step.distance_metric))
     pm._log.info('Using {} as summary statistic'.format(step.sum_stat))
+    distance_list = []
 
-    if epsilons is None:
+    if step.epsilons is None:
         epsilon_list = []
-    else:
-        epsilons.append(min_epsilon)
-        epsilon_list = epsilons
 
-    while epsilon > min_epsilon:
+    else:
+        step.epsilons.append(step.min_epsilon)
+        epsilon_list = step.epsilons
+
+    while epsilon > step.min_epsilon:
         if stage == 0:
             pm._log.info('Sample initial stage: ...')
             posterior = _initial_population(draws, model, variables)
@@ -123,16 +135,20 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         resampling_indexes = np.random.choice(np.arange(draws), size=draws, p=weights)
         posterior = posterior[resampling_indexes]
         # compute proposal distribution based on weights
-        covariance = _calc_covariance(posterior, weights)
+        try:
+            covariance = _calc_covariance(posterior, weights)
+        except ValueError:
+            pm._log.info('Could not compute covariance matrix')
+            break
         proposal = step.proposal(covariance)
         # get distance function
-        distance_function = get_distance(distance_metric)
+        distance_function = get_distance(step.distance_metric)
         # specify epsilon routine
         #epsilon_list = []
         #if epsilons is None:
         
         #else:
-        #epsilons.append(min_epsilon)
+        #epsilons.append(step.min_epsilon)
         #epsilon_list = epsilons
         # compute scaling and number of Markov chains steps (optional), based on previous
         # acceptance rate
@@ -147,7 +163,17 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         accepted = 0.
         new_posterior_list = []
         proposal_list = []
-        distance_list = []
+
+        #if step.epsilons is None:
+        if stage == 0:
+            simulated_sample = [function(*sample) for sample in posterior[::10]]
+            epsilon_list.append(calc_epsilon(simulated_sample[0], step.iqr_scale, step, step.epsilons, stage))
+        else:
+            epsilon_list.append(calc_epsilon(distance_list, step.iqr_scale, step, step.epsilons, stage))
+            distance_list = []
+        
+        epsilon = epsilon_list[stage]
+        pm._log.info('Sampling stage {} with Epsilon {:f}'.format(stage, epsilon))
 
         for draw in tqdm(range(draws), disable=not progressbar):
             q_old = posterior[draw]
@@ -164,40 +190,37 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
                         q_new = (q_old + delta)
                 else:
                     q_new = q_old + delta
-
-                simulated_data = function(*q_new)
                 
-                if epsilons is None:
-                    if stage == 0:
-                        simulated_sample = [function(*sample) for sample in posterior[::10]]
-                        epsilon_list.append(calc_epsilon(simulated_sample, iqr_scale))
-                    else:
-                        epsilon = calc_epsilon(distance_list, iqr_scale) * stage ** -0.25
-                        epsilon_list.append(epsilon)
-                epsilon = epsilon_list[stage]
-                simulated_stat = get_sum_stats(simulated_data, sum_stat=step.sum_stat)
-                distance = distance_function(simulated_stat, sum_stat_observed)
+                if np.isfinite(prior_logp(*q_new)):
 
-                if distance < epsilon:
-                    accepted += 1.
-                    new_posterior_list.append(q_new)
-                    proposal_list.append(proposal.logp(covariance * step.scaling, q_new))
-                    distance_list.append(distance)
-                    break
-                
+                    simulated_data = function(*q_new)
+                    
+                    simulated_stat = get_sum_stats(simulated_data, sum_stat=step.sum_stat)
+                    distance = distance_function(simulated_stat, observed_sum_stat)
+
+                    if distance < epsilon:
+                        accepted += 1.
+                        new_posterior_list.append(q_new)
+                        proposal_list.append(proposal.logp(covariance * step.scaling, q_new))
+                        distance_list.append(distance)
+                        break
+                    
                 proposed += 1.
 
-        pm._log.info('Sampling stage {} with Epsilon {:f}'.format(stage, epsilon))
-        new_posterior = np.array(new_posterior_list)
-        resampling_indexes = np.random.choice(np.arange(len(new_posterior)), size=draws)
+        if new_posterior_list:
+            new_posterior = np.array(new_posterior_list)
+            resampling_indexes = np.random.choice(np.arange(len(new_posterior)), size=draws)
 
-        posterior = new_posterior[resampling_indexes]
-        proposal_array = np.array(proposal_list)
-        proposal_array = proposal_array[resampling_indexes]
-        priors = np.array([prior_logp(*sample) for sample in posterior])
-        un_weights = priors - proposal_array
-        acc_rate = accepted / proposed
-        stage += 1
+            posterior = new_posterior[resampling_indexes]
+            proposal_array = np.array(proposal_list)
+            proposal_array = proposal_array[resampling_indexes]
+            priors = np.array([prior_logp(*sample) for sample in posterior])
+            un_weights = priors - proposal_array
+            acc_rate = accepted / proposed
+            stage += 1
+        else:
+            pm._log.info('Acceptance rate is 0')
+            break
 
     trace = _posterior_to_trace(posterior, model)
 
@@ -221,20 +244,23 @@ def _initial_population(samples, model, variables):
     return population
 
 
-def calc_epsilon(population, iqr_scale):
+def calc_epsilon(population, iqr_scale, step, epsilons, stage):
     """Calculate next epsilon threshold based on the current population.
 
     Returns
     -------
     epsilon : float
     """
-    
-    range_iq = mquantiles(population, prob=[0.25, 0.75])
-    epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
+    if step.epsilons is None:
+        range_iq = mquantiles(population, prob=[0.25, 0.75])
+        epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
+    else:
+        epsilon = step.epsilons[stage]
 
-    return epsilon
-    #self.likelihoods = np.ones_like(self.likelihoods)
+    return epsilon 
+
 def calc_weights(un_weights):
+    """Compute importance weights"""
     weights_un = np.exp(un_weights - un_weights.max())
     weights = weights_un / np.sum(weights_un)
     return weights
@@ -328,9 +354,9 @@ def euclidean_distance(a, b):
 
 def get_distance(func_name):
     d = {'absolute difference': absolute_difference,
-         'sum_of_squared_distance' : sum_of_squared_distance,
-         'mean_absolute_error' : mean_absolute_error,
-         'mean_squared_error' : mean_squared_error,
+         'sum of squared_distance' : sum_of_squared_distance,
+         'mean absolute_error' : mean_absolute_error,
+         'mean squared_error' : mean_squared_error,
          'euclidean' : euclidean_distance}
     for key, value in d.items():
         if func_name == key:

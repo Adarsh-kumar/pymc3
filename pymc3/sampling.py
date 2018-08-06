@@ -346,10 +346,6 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
                                progressbar=progressbar,
                                model=model,
                                random_seed=random_seed,
-                               iqr_scale=step_kwargs.get('iqr_scale', 1),
-                               min_epsilon=step_kwargs.get('min_epsilon', 0.5),
-                               epsilons=step_kwargs.get('epsilons', None),
-                               distance_metric=step_kwargs.get('distance_metric', 'absolute difference'),
                                **kwargs)
 
     else:

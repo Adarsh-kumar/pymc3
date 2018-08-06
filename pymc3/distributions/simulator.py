@@ -7,20 +7,15 @@ __all__ = ['Simulator']
 
 class Simulator(NoDistribution):
 
-    def __init__(self, function, parameters, sum_stat=None, distance_metric=None, *args, **kwargs):
+    def __init__(self, function, sum_stat=None, distance_metric=None, *args, **kwargs):
    
         self.function = function
-        self.parameters = parameters
-        #self.epsilon = theano.shared(np.inf)
-        #self.sum_stat = sum_stat
         observed = self.data
-        #self.observed_stat = get_sum_stats(observed, sum_stat=sum_stat)
-        #self.distance_metric = distance_metric
         super(Simulator, self).__init__(shape=np.prod(observed.shape), dtype=observed.dtype, *args, **kwargs)
 
     def random(self, point=None, size=None):
         """
-        Draw random values from Uniform distribution.
+        Draw random values from Simulator
 
         Parameters
         ----------
@@ -40,7 +35,7 @@ class Simulator(NoDistribution):
         
     def logp(self, value):
         """
-        Calculate log-probability of Uniform distribution at specified value.
+        
 
         Parameters
         ----------
@@ -61,61 +56,3 @@ class Simulator(NoDistribution):
         sum_stat = dist.sum_stat
         return r'${} \sim \text{{Simulator}}(\mathit{{function}}={},~\mathit{{parameters}}={},~\mathit{{summary statistics}}={})$'.format(
             name, function, params, sum_stat)
-
-def get_sum_stats(data, sum_stat=None):
-    """
-    Parameters:
-    -----------
-    data : array
-        Observed or simulated data
-    sum_stat : list
-        List of summary statistics to be computed. Accepted strings are mean, std, var. 
-        Python functions can be passed in this argument.
-
-    Returns:
-    --------
-    sum_stat_vector : array
-        Array contaning the summary statistics.
-    """
-    
-    if data.ndim == 1:
-        data = data[:,np.newaxis]
-    sum_stat_vector = np.zeros((len(sum_stat), data.shape[1]))
-
-    for i, stat in enumerate(sum_stat):
-        for j in range(sum_stat_vector.shape[1]):
-            if stat == 'mean':
-                sum_stat_vector[i, j] =  data[:,j].mean()
-            elif stat == 'std':
-                sum_stat_vector[i, j] =  data[:,j].std()
-            elif stat == 'var':
-                sum_stat_vector[i, j] =  data[:,j].var()
-            else:
-                sum_stat_vector[i, j] =  stat(data[:,j])
-
-    return np.atleast_1d(np.squeeze(sum_stat_vector))
-
-def absolute_difference(a, b):
-    return tt.sum(np.abs(a - b))
-
-def sum_of_squared_distance(a, b):
-    return tt.sum((a - b)**2)
-
-def mean_absolute_error(a, b):
-    return tt.sum(np.abs(a - b))/len(a)
-
-def mean_squared_error(a, b):
-    return tt.sum((a - b)**2)/len(a)
-
-def euclidean_distance(a, b):
-    return np.sqrt(tt.sum((a - b)**2))
-
-def get_distance(func_name):
-    d = {'absolute_difference': absolute_difference,
-         'sum_of_squared_distance' : sum_of_squared_distance,
-         'mean_absolute_error' : mean_absolute_error,
-         'mean_squared_error' : mean_squared_error,
-         'euclidean' : euclidean_distance}
-    for key, value in d.items():
-        if func_name == key:
-            return value
