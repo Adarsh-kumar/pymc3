@@ -101,8 +101,12 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         np.random.seed(random_seed)
 
     stage = 0
-    #variables = treelist(set(model.vars).symmetric_difference(model.unobserved_RVs))
-    #print(variables, type(variables),type(variables[0]) )
+    #variables = pm.model.treelist([])
+    #for k, v in model.named_vars.items():
+    #    if not isinstance(v, pm.model.ObservedRV):
+    #        if not pm.util.is_transformed_name(k):
+    #            print(v)
+    #            variables.append(v)
     variables = model.vars
     discrete = np.concatenate([[v.dtype in pm.discrete_types] * (v.dsize or 1) for v in variables])
     any_discrete = discrete.any()
@@ -143,13 +147,7 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         proposal = step.proposal(covariance)
         # get distance function
         distance_function = get_distance(step.distance_metric)
-        # specify epsilon routine
-        #epsilon_list = []
-        #if epsilons is None:
         
-        #else:
-        #epsilons.append(step.min_epsilon)
-        #epsilon_list = epsilons
         # compute scaling and number of Markov chains steps (optional), based on previous
         # acceptance rate
         #if step.tune and stage > 0:
@@ -166,7 +164,7 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
 
         #if step.epsilons is None:
         if stage == 0:
-            simulated_sample = [function(*sample) for sample in posterior[::10]]
+            simulated_sample = [function(*sample) for sample in posterior][::10]
             epsilon_list.append(calc_epsilon(simulated_sample[0], step.iqr_scale, step, step.epsilons, stage))
         else:
             epsilon_list.append(calc_epsilon(distance_list, step.iqr_scale, step, step.epsilons, stage))
@@ -238,6 +236,7 @@ def _initial_population(samples, model, variables):
         if pm.util.is_transformed_name(v.name):
             trans = v.distribution.transform_used.forward_val
             population[:,idx] = trans(v.distribution.dist.random(size=samples, point=start))
+            population[:,idx] = v.distribution.dist.random(size=samples, point=start)
         else:
             population[:,idx] = v.random(size=samples, point=start)
 
