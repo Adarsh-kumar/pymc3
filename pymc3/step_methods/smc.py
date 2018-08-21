@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 """
 Sequential Monte Carlo sampler
 =======
@@ -16,6 +17,10 @@ Renamed to SMC and further improvements March 2017
 Sequential Monte Carlo sampler
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+"""
+Sequential Monte Carlo sampler
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
 """
 import numpy as np
 import theano
@@ -41,6 +46,7 @@ proposal_dists = {'MultivariateNormal': MultivariateNormalProposal}
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 class SMC():
 =======
 <<<<<<< HEAD
@@ -64,12 +70,17 @@ class SMC(atext.ArrayStepSharedLLK):
     """Adaptive Transitional Markov-Chain Monte-Carlo sampler class.
     Creates initial samples and framework around the (C)ATMIP parameters
 =======
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
 class SMC():
     """
     Sequential Monte Carlo step
 
+<<<<<<< HEAD
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     Parameters
     ----------
     n_steps : int
@@ -91,6 +102,7 @@ class SMC():
     model : :class:`pymc3.Model`
         Optional model for sampling step. Defaults to None (taken from context).
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 =======
 <<<<<<< HEAD
@@ -100,6 +112,9 @@ class SMC():
 
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     References
     ----------
     .. [Minson2013] Minson, S. E. and Simons, M. and Beck, J. L., (2013),
@@ -129,6 +144,7 @@ class SMC():
         self.threshold = threshold
 
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 def sample_smc(draws=5000, step=None, progressbar=False, model=None, random_seed=-1):
     """
@@ -374,12 +390,17 @@ def sample_smc(samples=1000, chains=100, step=None, start=None, homepath=None, s
         iterations, the iterations can be computed automatically.
     (5) Repeat until `beta` > 1.
 =======
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
 def sample_smc(draws=5000, step=None, progressbar=False, model=None, random_seed=-1):
     """
     Sequential Monte Carlo sampling
 
+<<<<<<< HEAD
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     Parameters
     ----------
     draws : int
@@ -389,6 +410,7 @@ def sample_smc(draws=5000, step=None, progressbar=False, model=None, random_seed
         SMC initialization object
     progressbar : bool
         Flag for displaying a progress bar
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
 <<<<<<< HEAD
@@ -407,14 +429,19 @@ def sample_smc(draws=5000, step=None, progressbar=False, model=None, random_seed
         `link <https://gji.oxfordjournals.org/content/194/3/1701.full>`__
 =======
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     model : pymc3 Model
         optional if in `with` context
     random_seed : int
         random seed
 <<<<<<< HEAD
+<<<<<<< HEAD
     """
 =======
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     """
     warnings.warn("Warning: SMC is experimental, hopefully it will be ready for PyMC 3.6")
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
@@ -588,6 +615,7 @@ def _initial_population(draws, model, variables):
 def _calc_beta(beta, likelihoods, threshold=0.5):
     """
 <<<<<<< HEAD
+<<<<<<< HEAD
     Modified from :func:`pymc3.sampling._iter_sample` to be more efficient with SMC algorithm.
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
     """
@@ -602,6 +630,8 @@ def _calc_beta(beta, likelihoods, threshold=0.5):
         Containing all the information that is unique for each Markov Chain
         i.e. [:class:'SMC', chain_number(int), sampling index(int), start_point(dictionary)]
 =======
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     Calculate next inverse temperature (beta) and importance weights based on current beta
     and tempered likelihood.
 
@@ -618,6 +648,7 @@ def _calc_beta(beta, likelihoods, threshold=0.5):
         It should be between 0 and 1.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     Returns
     -------
     beta : float
@@ -628,6 +659,8 @@ def _calc_beta(beta, likelihoods, threshold=0.5):
         Importance weights (floats)
 =======
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     Returns
     -------
     new_beta : float
@@ -684,17 +717,23 @@ def _tune(acc_rate):
     Tune adaptively based on the acceptance rate.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 <<<<<<< HEAD
 def tune(acc_rate):
     """Tune adaptively based on the acceptance rate.
 =======
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
 def _tune(acc_rate):
     """
     Tune adaptively based on the acceptance rate.
 
+<<<<<<< HEAD
 >>>>>>> 28ab6d9f9d83cd6a3f85e523d15ee65c2c233e76
 >>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+=======
+>>>>>>> 824777c7f789790cf583a017c3c9c0f7d1a450c7
     Parameters
     ----------
     acc_rate: float
@@ -738,6 +777,7 @@ def _posterior_to_trace(posterior, model, var_info):
 
 def logp_forw(out_vars, vars, shared):
     """Compile Theano function of the model and the input and output variables.
+
     Parameters
     ----------
     out_vars : List
