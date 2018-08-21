@@ -323,11 +323,8 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
     if isinstance(step, pm.step_methods.smc.SMC):
         if step_kwargs is None:
             step_kwargs = {}
-        if chains is None:
-            chains = 100
-        if cores is None:
-            cores = 1
         test_folder = mkdtemp(prefix='SMC_TEST')
+<<<<<<< HEAD
         trace = smc.sample_smc(draws=draws,   
                                step=step,
                                progressbar=progressbar,
@@ -350,6 +347,13 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
                                random_seed=random_seed,
                                **kwargs)
 
+=======
+        trace = smc.sample_smc(draws=draws,
+                               step=step,
+                               progressbar=progressbar,
+                               model=model,
+                               random_seed=random_seed)
+>>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
     else:
         if cores is None:
             cores = min(4, _cpu_count())
