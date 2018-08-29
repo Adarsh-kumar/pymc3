@@ -64,7 +64,7 @@ class SMC_ABC():
     """
     def __init__(self, n_steps=5, scaling=1., p_acc_rate=0.01, tune=True, sum_stat=['mean'],
         min_epsilon=0.5, iqr_scale=1, distance_metric='absolute difference', epsilons=None, 
-        proposal_name='MultivariateNormal', ):
+        proposal_name='MultivariateNormal', routine='iqr'):
 
         self.n_steps = n_steps
         self.scaling = scaling
@@ -74,8 +74,9 @@ class SMC_ABC():
         self.sum_stat = sum_stat
         self.min_epsilon = min_epsilon
         self.iqr_scale = iqr_scale
-        self. distance_metric = distance_metric
+        self.distance_metric = distance_metric
         self.epsilons = epsilons
+        self.routine = routine
 
 def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_seed=-1):
     """
@@ -116,9 +117,9 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
     function = simulator.distribution.function
     observed_sum_stat = get_sum_stats(simulator.observations, sum_stat=step.sum_stat)
     epsilon = np.inf
+    distance_list = []
     pm._log.info('Using {} as distance metric'.format(step.distance_metric))
     pm._log.info('Using {} as summary statistic'.format(step.sum_stat))
-    distance_list = []
 
     if step.epsilons is None:
         epsilon_list = []
@@ -165,9 +166,9 @@ def sample_smc_abc(draws=5000, step=None, progressbar=False, model=None, random_
         #if step.epsilons is None:
         if stage == 0:
             simulated_sample = [function(*sample) for sample in posterior][::10]
-            epsilon_list.append(calc_epsilon(simulated_sample[0], step.iqr_scale, step, step.epsilons, stage))
+            epsilon_list.append(calc_epsilon(simulated_sample[0], step.iqr_scale, step, step.epsilons, stage, step.routine))
         else:
-            epsilon_list.append(calc_epsilon(distance_list, step.iqr_scale, step, step.epsilons, stage))
+            epsilon_list.append(calc_epsilon(distance_list, step.iqr_scale, step, step.epsilons, stage, step.routine))
             distance_list = []
         
         epsilon = epsilon_list[stage]
@@ -243,7 +244,26 @@ def _initial_population(samples, model, variables):
     return population
 
 
-def calc_epsilon(population, iqr_scale, step, epsilons, stage):
+#def _initial_population(draws, model, variables):
+#    """
+#    Create an initial population from the prior
+#    """
+#    population = []
+#    var_info = {}
+#    start = model.test_point
+#    init_rnd = pm.sample_prior_predictive(draws, model=model)
+#    for v in variables:
+#        var_info[v.name] = (start[v.name].shape, start[v.name].size)
+#
+#    for i in range(draws):
+#        point = pm.Point({v.name: init_rnd[v.name][i] for v in variables}, model=model)
+#        population.append(model.dict_to_array(point))
+#
+#    return np.array(population), var_info
+
+
+
+def calc_epsilon(population, iqr_scale, step, epsilons, stage, routine):
     """Calculate next epsilon threshold based on the current population.
 
     Returns
@@ -251,8 +271,11 @@ def calc_epsilon(population, iqr_scale, step, epsilons, stage):
     epsilon : float
     """
     if step.epsilons is None:
-        range_iq = mquantiles(population, prob=[0.25, 0.75])
-        epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
+        if step.routine == 'iqr':
+            range_iq = mquantiles(population, prob=[0.25, 0.75])
+            epsilon = np.abs(range_iq[1] - range_iq[0]) * iqr_scale
+        if step.routine == 'median':
+            epsilon = np.abs(np.median(population)) * iqr_scale
     else:
         epsilon = step.epsilons[stage]
 

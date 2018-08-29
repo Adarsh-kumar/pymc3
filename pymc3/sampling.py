@@ -16,7 +16,7 @@ from .distributions.distribution import draw_values
 from .model import modelcontext, Point, all_continuous
 from .step_methods import (NUTS, HamiltonianMC, Metropolis, BinaryMetropolis,
                            BinaryGibbsMetropolis, CategoricalGibbsMetropolis,
-                           Slice, CompoundStep, arraystep, smc, SMC_ABC)
+                           Slice, CompoundStep, arraystep, smc, smc_ABC)
 from .util import update_start_vals, get_untransformed_name, is_transformed_name, get_default_varnames
 from .vartypes import discrete_types
 from pymc3.step_methods.hmc import quadpotential
@@ -324,36 +324,21 @@ def sample(draws=500, step=None, init='auto', n_init=200000, start=None, trace=N
         if step_kwargs is None:
             step_kwargs = {}
         test_folder = mkdtemp(prefix='SMC_TEST')
-<<<<<<< HEAD
-        trace = smc.sample_smc(draws=draws,   
-                               step=step,
-                               progressbar=progressbar,
-                               model=model,
-                               random_seed=random_seed)
-
-
-    elif isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
-        if step_kwargs is None:
-            step_kwargs = {}
-        if chains is None:
-            chains = 100
-        if cores is None:
-            cores = 1
-        test_folder = mkdtemp(prefix='SMC_TEST')
-        trace = pm.step_methods.smc_ABC.sample_smc_abc(draws=draws,
-                               step=step,
-                               progressbar=progressbar,
-                               model=model,
-                               random_seed=random_seed,
-                               **kwargs)
-
-=======
         trace = smc.sample_smc(draws=draws,
                                step=step,
                                progressbar=progressbar,
                                model=model,
                                random_seed=random_seed)
->>>>>>> 3117be6c7d65464d4e0593df659b0edb1927a4a8
+
+    elif isinstance(step, pm.step_methods.smc_ABC.SMC_ABC):
+        if step_kwargs is None:
+            step_kwargs = {}
+        test_folder = mkdtemp(prefix='SMC_ABC_TEST')
+        trace = smc_ABC.sample_smc_abc(draws=draws,
+                               step=step,
+                               progressbar=progressbar,
+                               model=model,
+                               random_seed=random_seed)
     else:
         if cores is None:
             cores = min(4, _cpu_count())
