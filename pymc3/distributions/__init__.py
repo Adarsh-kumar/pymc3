@@ -158,5 +158,9 @@ __all__ = ['Uniform',
            'LogitNormal',
            'Interpolated',
            'Bound',
+<<<<<<< HEAD
            'Simulator'
+=======
+           'Rice',
+>>>>>>> 52d1e239c21f56098a8ad03e30d0aa6ab9032a9d
            ]
